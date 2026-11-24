@@ -8,8 +8,10 @@
   "name": "HUD Plus",
   "overwrites": false,
   "priority": -500,
-  "requires": [
-    ""
+  "requires": [],
+  "tags": [
+    "Tool",
+    "Clientside"
   ],
   "version": "1.0.0"
 }
