@@ -1,9 +1,8 @@
-# HUD Plus -- module C: a deliberately plain, small top-left CanvasLayer HUD.
+# HUD Plus -- compact, muted top-left overlay.
 extends CanvasLayer
 
 var cfg = null
 var panel = null
-var header = null
 var footer = null
 var rows = []
 var game_ref = null
@@ -27,49 +26,55 @@ func _make_font(size):
 		return f
 	return null
 
-func _label(text, min_w=0):
+func _label(text, min_w=0, alpha=0.9):
 	var l = Label.new()
 	l.text = text
+	l.clip_text = true
 	if min_w > 0:
 		l.rect_min_size.x = min_w
+		l.size_flags_horizontal = Control.SIZE_FILL
 	if _font != null:
 		l.add_font_override("font", _font)
-	l.set_modulate(Color(0.88, 0.90, 0.92, 0.95))
+	l.set_modulate(Color(0.82, 0.86, 0.90, alpha))
 	return l
 
 func _build():
-	_font = _make_font(11)
+	_font = _make_font(9)
 	panel = Panel.new()
 	panel.name = "HUDPlusPanel"
+	panel.rect_min_size = Vector2(292, 70)
+	panel.rect_size = Vector2(292, 70)
+	panel.rect_clip_content = true
 	add_child(panel)
 	var sb = StyleBoxFlat.new()
-	sb.bg_color = Color(0.045, 0.055, 0.07, 0.86)
+	sb.bg_color = Color(0.04, 0.05, 0.06, 0.78)
 	sb.set_border_width_all(1)
-	sb.border_color = Color(0.24, 0.28, 0.34, 0.9)
-	sb.set_content_margin_all(6)
+	sb.border_color = Color(0.20, 0.24, 0.28, 0.75)
+	sb.set_content_margin_all(4)
 	panel.add_stylebox_override("panel", sb)
 
 	var box = VBoxContainer.new()
-	box.set_grow_horizontal(Control.GROW_DIRECTION_END)
+	box.separation = 0
 	panel.add_child(box)
-	header = _label("HUD Plus", 0)
-	header.set_modulate(Color(0.60, 0.68, 0.76, 0.85))
+	var header = _label("HUD+", 0, 0.55)
 	box.add_child(header)
 
 	for i in range(3):
 		var row = HBoxContainer.new()
-		row.name = "Row" + str(i)
-		var rank = _label(str(i + 1), 16)
-		var name_l = _label("-", 96)
+		row.separation = 3
+		row.rect_min_size.y = 11
+		var rank = _label(str(i + 1), 10, 0.55)
+		var name_l = _label("-", 76)
 		var bar_bg = ColorRect.new()
-		bar_bg.rect_min_size = Vector2(64, 7)
-		bar_bg.color = Color(0.16, 0.18, 0.21, 0.9)
+		bar_bg.rect_min_size = Vector2(34, 5)
+		bar_bg.rect_size = Vector2(34, 5)
+		bar_bg.color = Color(0.14, 0.16, 0.18, 0.9)
 		var bar_fill = ColorRect.new()
-		bar_fill.rect_min_size = Vector2(0, 7)
+		bar_fill.rect_min_size = Vector2(0, 5)
 		bar_fill.color = Color(0.3, 0.7, 0.4, 0.9)
 		bar_bg.add_child(bar_fill)
-		var score = _label("0", 26)
-		var reason = _label("", 128)
+		var score = _label("0", 16, 0.7)
+		var reason = _label("", 128, 0.8)
 		row.add_child(rank)
 		row.add_child(name_l)
 		row.add_child(bar_bg)
@@ -81,10 +86,9 @@ func _build():
 			"bar": bar_bg, "fill": bar_fill, "score": score, "reason": reason,
 		})
 
-	footer = _label("", 0)
-	footer.set_modulate(Color(0.55, 0.62, 0.70, 0.85))
+	footer = _label("", 0, 0.55)
+	footer.rect_min_size.x = 284
 	box.add_child(footer)
-	panel.rect_size = Vector2(340, 96)
 
 func apply_settings():
 	if panel == null or cfg == null:
@@ -95,10 +99,15 @@ func apply_settings():
 
 func _color_for(score):
 	if score >= 70.0:
-		return Color(0.32, 0.78, 0.42, 0.95)
+		return Color(0.30, 0.74, 0.40, 0.95)
 	if score >= 40.0:
-		return Color(0.92, 0.68, 0.22, 0.95)
-	return Color(0.85, 0.32, 0.32, 0.95)
+		return Color(0.88, 0.64, 0.20, 0.95)
+	return Color(0.82, 0.30, 0.30, 0.95)
+
+func _short(text, limit):
+	if text.length() <= limit:
+		return text
+	return text.substr(0, limit - 1) + "~"
 
 func set_game(g):
 	game_ref = g
@@ -119,28 +128,27 @@ func show_result(result):
 		var entry = list[i]
 		var s = clamp(float(entry.get("score", 0.0)), 0.0, 100.0)
 		r.rank.text = str(i + 1)
-		r.name.text = str(entry.get("name", "?"))
-		r.score.text = "%d" % int(s)
-		r.reason.text = str(entry.get("reason", ""))
+		r.name.text = _short(str(entry.get("name", "?")), 12)
+		r.score.text = str(int(s))
+		var why = str(entry.get("reason", ""))
+		if bool(entry.get("static", false)):
+			why = "static " + why
+		r.reason.text = _short(why, 26)
 		var c = _color_for(s)
 		r.fill.color = c
-		r.name.set_modulate(c if i == 0 else Color(0.88, 0.90, 0.92, 0.95))
-		r.fill.rect_min_size.x = 64.0 * (s / 100.0)
+		r.name.set_modulate(c if i == 0 else Color(0.82, 0.86, 0.90, 0.9))
+		r.fill.rect_min_size.x = 34.0 * (s / 100.0)
 		r.bar.update_minimum_size()
-		if bool(entry.get("static", false)):
-			r.reason.text = "static: " + r.reason.text
-	var confidence = float(result.get("confidence", 0.0))
-	var static = bool(result.get("static", false))
-	var di = str(result.get("di", "no DI"))
-	var txt = "confidence %d%%" % int(confidence)
-	if cfg.ui["show_confidence"]:
-		txt += "  |  " + str(result.get("status", ""))
-	txt += "  |  " + di
-	if static:
-		txt += "  |  STATIC"
+
+	var bits = []
+	bits.append(str(int(result.get("confidence", 0.0))) + "%")
+	bits.append(str(result.get("status", "")))
+	bits.append(str(result.get("di", "no DI")))
+	if bool(result.get("static", false)):
+		bits.append("STATIC")
 	if result.has("note") and str(result["note"]) != "":
-		txt += "  |  " + str(result["note"])
-	footer.text = txt
+		bits.append(str(result["note"]))
+	footer.text = _short(" | ".join(bits), 46)
 
 func _match_active():
 	if game_ref == null or not is_instance_valid(game_ref):
@@ -163,7 +171,7 @@ func _process(_delta):
 		return
 	var mouse = get_viewport().get_mouse_position()
 	if Input.is_key_pressed(int(cfg.ui["drag_key"])):
-		panel.set_position(mouse - Vector2(12, 12))
+		panel.set_position(mouse - Vector2(8, 8))
 		cfg.ui["offset_x"] = panel.position.x
 		cfg.ui["offset_y"] = panel.position.y
 	elif Input.is_key_pressed(int(cfg.ui["scale_key"])):

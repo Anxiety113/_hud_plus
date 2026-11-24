@@ -36,8 +36,12 @@ func _reason_for(c, sample):
 		reasons.append("safe, +%d on block" % plus)
 	if cost > 0.0:
 		reasons.append("spends resource")
-	if bool(c.get("unknown", false)):
-		reasons.append("unknown frame data")
+	if startup < 0:
+		reasons.append("no startup data")
+	if reach < 0.0:
+		reasons.append("no reach data")
+	if not bool(c.get("damage_known", true)):
+		reasons.append("no damage data")
 	if reasons.empty():
 		if damage > 0:
 			reasons.append("reaches, %d damage" % damage)
@@ -62,7 +66,8 @@ func rank(candidates, sample, cfg):
 
 		var in_range = 0.0
 		if reach < 0.0:
-			in_range = 0.0
+			# Missing geometry is not neutral: an empty state cannot hit.
+			in_range = -0.9
 		elif reach + 2.0 >= distance:
 			in_range = 1.0
 		else:
@@ -73,11 +78,14 @@ func rank(candidates, sample, cfg):
 			speed_edge = clamp(float(opp_startup - startup) * 0.06, -0.6, 0.6)
 
 		var kill_bonus = 8.0 if damage >= 1500 else 0.0
-		var defense_bonus = (0.5 if armor else 0.0) + (0.5 if invuln else 0.0)
+		# Armor only matters on a move that can actually connect.
+		var defense_bonus = (0.3 if armor and reach >= 0.0 else 0.0) + (0.3 if invuln else 0.0)
 		var raw = 0.5 + (float(damage) / 300.0) + speed_edge + in_range \
 			+ kill_bonus + defense_bonus - (cost * 0.6)
 		if unknown:
-			raw -= 0.15
+			raw -= 0.4
+		if not bool(c.get("damage_known", true)):
+			raw -= 0.5
 		# Static mode is a safety net, not a fortune teller: keep scores finite.
 		if is_nan(raw) or is_inf(raw):
 			raw = 0.0

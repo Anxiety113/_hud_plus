@@ -22,6 +22,8 @@ var _last_opp = null
 var _ghost = null
 var _ghost_ready = false
 var _ghost_match_key = ""
+var _ghost_create_count = 0
+var _ghost_host = null
 var _props = {}
 
 # Test hook: a synthetic Game substitute can be injected for headless tests.
@@ -92,6 +94,8 @@ func _ensure_ghost(game):
 	var key = _match_key(game)
 	if _ghost != null and is_instance_valid(_ghost) and _ghost_match_key == key:
 		return true
+	if _ghost != null and not is_instance_valid(_ghost) and _ghost_create_count <= 8:
+		print("[HUD Plus DBG] ghost became invalid, recreating (count=" + str(_ghost_create_count) + ")")
 	if ghost_override != null and is_instance_valid(ghost_override):
 		_ghost = ghost_override
 		_ghost_match_key = key
@@ -104,9 +108,16 @@ func _ensure_ghost(game):
 	var scene = load("res://Game.tscn")
 	if scene == null:
 		return false
-	var host = _find_viewport(game)
-	if host == null:
-		return false
+	# Do NOT parent to GhostViewport: the game frees hidden ghost games there.
+	# Use our own host node so the pooled clone survives between passes.
+	if _ghost_host == null or not is_instance_valid(_ghost_host):
+		var tree = game.get_tree()
+		if tree == null or tree.get_root() == null:
+			return false
+		_ghost_host = Node.new()
+		_ghost_host.name = "HUDPlusGhostHost"
+		tree.get_root().add_child(_ghost_host)
+	var host = _ghost_host
 	var g = scene.instance()
 	if g == null:
 		return false
@@ -123,6 +134,9 @@ func _ensure_ghost(game):
 	_ghost = g
 	_ghost_match_key = key
 	_ghost_ready = true
+	_ghost_create_count += 1
+	if _ghost_create_count <= 8:
+		print("[HUD Plus DBG] ghost created #" + str(_ghost_create_count) + " key=" + key)
 	return true
 
 func _prepare_ghost(g):
@@ -313,7 +327,12 @@ func _reason(r):
 	if r.resource_cost > 0.0:
 		parts.append("spends resource")
 	if bool(r.unknown):
-		parts.append("unknown frame data")
+		if int(r.startup) < 0:
+			parts.append("no startup data")
+		elif float(r.reach) < 0.0:
+			parts.append("no reach data")
+		else:
+			parts.append("no damage data")
 	if parts.empty():
 		parts.append("no clear advantage")
 	var trimmed = []
@@ -343,7 +362,7 @@ func _score(r):
 
 func _signature(c):
 	# String key: arrays as Dictionary keys are not reliably hashable in GDScript 3.
-	return str(int(c.get("startup", -1))) + "|" + str(int(c.get("reach", -10))) + "|" \
+	return str(c.get("name", "?")) + "|" + str(int(c.get("startup", -1))) + "|" + str(int(c.get("reach", -10))) + "|" \
 		+ str(int(c.get("damage", 0))) + "|" + str(bool(c.get("armor", false))) + "|" \
 		+ str(bool(c.get("invuln", false))) + "|" + str(int(c.get("cost", 0.0)))
 
@@ -385,6 +404,32 @@ func begin_pass(sample, game, me, opp):
 			_sim_mode = false
 	_pass_active = not _pending.empty()
 	_pass_start_us = OS.get_ticks_usec()
+
+func _break_ties_with_static():
+	# If every rollout produced the same outcome, the simulation cannot rank
+	# these moves. Fall back to live static metadata so the bars and reasons
+	# still say something truthful and distinct.
+	if _results.size() < 2:
+		return
+	var lo = float(_results[0].get("raw_score", 0.0))
+	var hi = lo
+	for r in _results:
+		var s = float(r.get("raw_score", 0.0))
+		lo = min(lo, s)
+		hi = max(hi, s)
+	if hi - lo >= 0.01:
+		return
+	var ranked = statics.rank(_pending, _last_sample, cfg)
+	var by_name = {}
+	for r in ranked:
+		by_name[str(r.get("name", ""))] = r
+	for r in _results:
+		var st = by_name.get(str(r.get("name", "")), null)
+		if st == null:
+			continue
+		r["raw_score"] = float(r.get("raw_score", 0.0)) + float(st.get("raw_score", 0.0)) * 0.02
+		r["reason"] = str(st.get("reason", ""))
+		r["static"] = true
 
 func _best_result():
 	var best = null
@@ -453,6 +498,7 @@ func step(budget_ms=4.0):
 		return false
 	if OS.get_ticks_usec() >= deadline:
 		return false
+	_break_ties_with_static()
 
 	# DI search is amortized the same way: one extra rollout per frame.
 	if not _di_initialized:
@@ -549,6 +595,12 @@ func get_results():
 	var di = _di_result if _sim_mode else "no DI"
 
 	var label = "close call -- low confidence" if confidence < 30.0 else ""
+	var whiff_count = 0
+	for r in ranked:
+		if float(r.get("whiff", 0.0)) > 0.5 or str(r.get("reason", "")).findn("whiff") >= 0:
+			whiff_count += 1
+	if whiff_count == ranked.size() and ranked.size() > 0:
+		label = "out of range -- close distance"
 	return {
 		"rows": ranked,
 		"confidence": confidence,

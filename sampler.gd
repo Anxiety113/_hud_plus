@@ -82,36 +82,66 @@ func _candidate_name(c, state):
 func _hitboxes_of(state):
 	if state == null or not is_instance_valid(state):
 		return []
-	var hb = _get(state, "hitboxes", [])
-	if hb is Array:
+	# This build exposes hitboxes through all_hitbox_nodes, not a plain
+	# "hitboxes" array. Fall back to children that look like hitboxes.
+	var hb = _get(state, "all_hitbox_nodes", [])
+	if hb is Array and not hb.empty():
 		return hb
-	return []
+	hb = _get(state, "hitboxes", [])
+	if hb is Array and not hb.empty():
+		return hb
+	var found = []
+	if state is Node:
+		for child in state.get_children():
+			if _get(child, "start_tick", null) != null or _get(child, "damage", null) != null:
+				found.append(child)
+	return found
+
+func _startup_of(state, boxes):
+	var starts = _get(state, "hitbox_start_frames", [])
+	if starts is Array:
+		for v in starts:
+			var n = int(_num(v, -1.0))
+			if n >= 0:
+				return n
+	var earliest = _get(state, "earliest_hitbox", null)
+	if typeof(earliest) == TYPE_INT or typeof(earliest) == TYPE_REAL:
+		var n = int(_num(earliest, -1.0))
+		if n >= 0:
+			return n
+	elif earliest != null and is_instance_valid(earliest):
+		var n = int(_num(_get(earliest, "start_tick", -1.0), -1.0))
+		if n >= 0:
+			return n
+	var best = -1
+	for box in boxes:
+		if box == null or not is_instance_valid(box):
+			continue
+		var n = int(_num(_get(box, "start_tick", -1.0), -1.0))
+		if n >= 0 and (best < 0 or n < best):
+			best = n
+	return best
 
 func _box_geometry(box):
-	var pos = _vec2(_get(box, "position", null))
-	var raw_size = _get(box, "rect_size", null)
-	var half = -1.0
-	if raw_size is Vector2:
-		half = max(abs(raw_size.x), abs(raw_size.y)) * 0.5
-	elif raw_size is Dictionary:
-		half = max(abs(_num(raw_size.get("x", 0.0))), abs(_num(raw_size.get("y", 0.0)))) * 0.5
-	else:
-		half = _num(raw_size, -1.0)
-	if half < 0.0:
-		half = _num(_get(box, "hitbox_size", null), -1.0)
-	if half >= 0.0 and _num(raw_size, -1.0) >= 0.0:
-		half *= 0.5
-	if half < 0.0:
-		var shape = _get(box, "shape", null)
-		if shape != null and is_instance_valid(shape):
-			var ext = _vec2(_get(shape, "extents", null))
-			half = max(abs(ext.x), abs(ext.y))
-			if half <= 0.0:
-				half = _num(_get(shape, "radius", 0.0))
-	if half < 0.0:
+	# CollisionBox in this build uses x/y/width/height (also exposed as
+	# pos_x/pos_y). get_rect_float() is the generic fallback.
+	var bx = _get(box, "x", null)
+	if bx == null:
+		bx = _get(box, "pos_x", null)
+	var bw = _get(box, "width", null)
+	var reach = -1.0
+	if bx != null and bw != null:
+		reach = abs(_num(bx)) + abs(_num(bw)) * 0.5
+	if reach < 0.0 and box is Node and box.has_method("get_rect_float"):
+		var r = box.call("get_rect_float")
+		if r is Rect2:
+			reach = abs(r.position.x) + r.size.x * 0.5
+		elif r is Dictionary:
+			reach = abs(_num(r.get("x", 0.0))) + _num(r.get("width", 0.0)) * 0.5
+	if reach < 0.0:
 		return { "reach": -1.0, "start": -1, "damage": -1, "plus": 0 }
 	return {
-		"reach": abs(pos.x) + half,
+		"reach": reach,
 		"start": int(_num(_get(box, "start_tick", -1.0), -1.0)),
 		"damage": int(_num(_get(box, "damage", -1.0), -1.0)),
 		"plus": int(_num(_get(box, "plus_frames", 0.0), 0.0)),
@@ -122,7 +152,7 @@ func make_candidate(c, fighter):
 	if not (c is Node) and c is Dictionary:
 		state = c.get("state", null)
 	var boxes = _hitboxes_of(state)
-	var startup = -1
+	var startup = _startup_of(state, boxes)
 	var reach = -1.0
 	var damage = -1
 	var plus = 0
@@ -145,7 +175,8 @@ func make_candidate(c, fighter):
 		cost += 0.25
 	var name = _candidate_name(c, state)
 	if damage < 0:
-		damage = int(_num(_get(state, "damage", 0.0), 0.0))
+		damage = int(_num(_get(state, "damage", -1.0), -1.0))
+	var damage_known = damage >= 0
 	return {
 		"name": name,
 		"state": state,
@@ -157,7 +188,8 @@ func make_candidate(c, fighter):
 		"armor": armor,
 		"invuln": invuln,
 		"cost": cost,
-		"unknown": startup < 0 or damage < 0 or reach < 0.0,
+		"unknown": startup < 0 or not damage_known or reach < 0.0,
+		"damage_known": damage_known,
 	}
 
 func _append_unique(out, seen, c, fighter):
@@ -178,23 +210,55 @@ func _append_unique(out, seen, c, fighter):
 	seen[key] = true
 	out.append(cand)
 
+func _category_priority(category):
+	var n = str(category).to_lower()
+	if n.findn("attack") >= 0:
+		return 0
+	if n.findn("throw") >= 0:
+		return 1
+	if n.findn("super") >= 0:
+		return 2
+	if n.findn("movement") >= 0:
+		return 3
+	if n.findn("special") >= 0:
+		return 4
+	if n.findn("defen") >= 0 or n.findn("parry") >= 0 or n.findn("burst") >= 0 or n.findn("counter") >= 0:
+		return 8
+	return 6
+
+func _sort_categories(a, b):
+	if int(a["prio"]) != int(b["prio"]):
+		return int(a["prio"]) < int(b["prio"])
+	return int(a["order"]) < int(b["order"])
+
 func collect_candidates(fighter, cap=8):
 	var out = []
 	var seen = {}
 	if fighter == null or not is_instance_valid(fighter):
 		return out
 	var cancels = _get(fighter, "action_cancels", {})
+	var entries = []
 	if cancels is Dictionary:
+		var order = 0
 		for category in cancels.keys():
 			var arr = cancels[category]
-			if not (arr is Array):
-				continue
-			for c in arr:
-				_append_unique(out, seen, c, fighter)
-				if out.size() >= cap:
-					break
-			if out.size() >= cap:
-				break
+			if arr is Array:
+				for c in arr:
+					entries.append({ "c": c, "prio": _category_priority(category), "order": order })
+			order += 1
+		entries.sort_custom(self, "_sort_categories")
+	var attacks_added = 0
+	for e in entries:
+		# Keep the list useful but varied: at most five attacks before filling
+		# the remaining slots with throws, supers, movement and defense.
+		if int(e["prio"]) == 0 and attacks_added >= 5:
+			continue
+		var before = out.size()
+		_append_unique(out, seen, e["c"], fighter)
+		if out.size() > before and int(e["prio"]) == 0:
+			attacks_added += 1
+		if out.size() >= cap:
+			break
 	# Fallback for modded characters that expose moves only through the state
 	# machine. Still no hardcoded names: selectable states are the source.
 	if out.size() < 3:
@@ -247,7 +311,7 @@ func sample(me, opp):
 		if st >= 0 and (my_startup < 0 or st < my_startup):
 			my_startup = st
 	var opp_boxes = _hitboxes_of(opp_state)
-	var opp_startup = -1
+	var opp_startup = _startup_of(opp_state, opp_boxes)
 	var opp_reach = -1.0
 	for b in opp_boxes:
 		if b == null or not is_instance_valid(b):
