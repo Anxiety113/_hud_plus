@@ -1,0 +1,15 @@
+{
+  "author": "HUD Plus",
+  "client_side": true,
+  "description": "Real-time, read-only combat advisor overlay. Advice only; submits no input.",
+  "friendly_name": "HUD Plus",
+  "id": "hud_plus_1",
+  "link": "",
+  "name": "HUD Plus",
+  "overwrites": false,
+  "priority": -500,
+  "requires": [
+    ""
+  ],
+  "version": "1.0.0"
+}
